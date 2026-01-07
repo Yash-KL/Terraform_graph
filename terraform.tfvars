@@ -1,0 +1,5 @@
+project_id   = "terraform-gcp-lab-001"
+region       = "us-central1"
+instance_name = "terraform-vm"
+machine_type  = "e2-medium"
+zone          = "us-central1-a"
