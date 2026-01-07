@@ -1,9 +1,16 @@
-name: Terraform Plan with Graph (PR Review)
+name: Terraform Plan with Graph (PR Review + Manual)
 
 on:
   pull_request:
     branches:
       - main
+
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: "Why are you running this plan?"
+        required: false
+        default: "Manual Terraform plan run"
 
 permissions:
   contents: read
