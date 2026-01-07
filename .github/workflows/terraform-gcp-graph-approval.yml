@@ -53,50 +53,51 @@ jobs:
         working-directory: ${{ env.TF_WORKING_DIR }}
         run: terraform graph -plan=tfplan.binary > tfplan.raw.dot
 
-      - name: Colorize Graph (Add / Change / Destroy)
+
+
+      - name: Colorize Graph (SAFE – Add / Change / Destroy)
         working-directory: ${{ env.TF_WORKING_DIR }}
         run: |
+          set -e
+
           ADDED=$(jq -r '.resource_changes[] | select(.change.actions==["create"]) | .address' tfplan.json)
           CHANGED=$(jq -r '.resource_changes[] | select(.change.actions|index("update")) | .address' tfplan.json)
           DESTROYED=$(jq -r '.resource_changes[] | select(.change.actions==["delete"]) | .address' tfplan.json)
 
-          cp tfplan.raw.dot tfplan.colored.dot
+          echo 'digraph terraform {' > tfplan.colored.dot
 
-          for r in $ADDED; do
-            sed -i "s|\"$r\"|\"$r\" [color=green, style=filled]|" tfplan.colored.dot
-          done
+          # Add subgraphs for coloring
+          if [ -n "$ADDED" ]; then
+            echo 'subgraph cluster_add {' >> tfplan.colored.dot
+            echo 'label="Add"; color=green;' >> tfplan.colored.dot
+            for r in $ADDED; do echo "\"$r\";" >> tfplan.colored.dot; done
+            echo '}' >> tfplan.colored.dot
+          fi
 
-          for r in $CHANGED; do
-            sed -i "s|\"$r\"|\"$r\" [color=orange, style=filled]|" tfplan.colored.dot
-          done
+          if [ -n "$CHANGED" ]; then
+            echo 'subgraph cluster_change {' >> tfplan.colored.dot
+            echo 'label="Change"; color=orange;' >> tfplan.colored.dot
+            for r in $CHANGED; do echo "\"$r\";" >> tfplan.colored.dot; done
+            echo '}' >> tfplan.colored.dot
+          fi
 
-          for r in $DESTROYED; do
-            sed -i "s|\"$r\"|\"$r\" [color=red, style=filled]|" tfplan.colored.dot
-          done
+          if [ -n "$DESTROYED" ]; then
+            echo 'subgraph cluster_destroy {' >> tfplan.colored.dot
+            echo 'label="Destroy"; color=red;' >> tfplan.colored.dot
+            for r in $DESTROYED; do echo "\"$r\";" >> tfplan.colored.dot; done
+            echo '}' >> tfplan.colored.dot
+          fi
 
-      - name: Install Graphviz
-        run: sudo apt-get update && sudo apt-get install -y graphviz
+          # Append original graph edges
+          grep '->' tfplan.raw.dot >> tfplan.colored.dot
+          echo '}' >> tfplan.colored.dot
 
-      - name: Generate Graph PNG
-        working-directory: ${{ env.TF_WORKING_DIR }}
-        run: dot -Tpng tfplan.colored.dot -o tfplan.png
 
-      - name: Show graph in workflow summary
-        working-directory: ${{ env.TF_WORKING_DIR }}
-        run: |
-          GRAPH_BASE64=$(base64 -w 0 tfplan.png)
 
-          printf '%s\n' \
-          '## Terraform Resource Graph (Colored Plan)' \
-          '' \
-          '**Legend:**' \
-          '- 🟢 Add' \
-          '- 🟡 Change' \
-          '- 🔴 Destroy' \
-          '' \
-          "<img src=\"data:image/png;base64,${GRAPH_BASE64}\" />" \
-          >> "$GITHUB_STEP_SUMMARY"
 
+
+
+      
       - name: Upload approved plan & graph
         uses: actions/upload-artifact@v4
         with:
