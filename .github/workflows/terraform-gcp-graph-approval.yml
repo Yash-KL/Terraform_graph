@@ -66,7 +66,6 @@ jobs:
 
           echo 'digraph terraform {' > tfplan.colored.dot
 
-          # Add subgraphs for coloring
           if [ -n "$ADDED" ]; then
             echo 'subgraph cluster_add {' >> tfplan.colored.dot
             echo 'label="Add"; color=green;' >> tfplan.colored.dot
@@ -88,9 +87,11 @@ jobs:
             echo '}' >> tfplan.colored.dot
           fi
 
-          # Append original graph edges
-          grep '->' tfplan.raw.dot >> tfplan.colored.dot
+          # Append original edges (SAFE)
+          grep -- '->' tfplan.raw.dot >> tfplan.colored.dot
+
           echo '}' >> tfplan.colored.dot
+
 
 
 
