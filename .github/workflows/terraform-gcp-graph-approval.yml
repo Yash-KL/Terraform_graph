@@ -48,13 +48,14 @@ jobs:
         working-directory: ${{ env.TF_WORKING_DIR }}
         run: terraform graph -plan=tfplan.binary > tfplan.dot
 
+
       - name: Generate Graph PNG using Graphviz Docker
         working-directory: ${{ env.TF_WORKING_DIR }}
         run: |
           docker run --rm \
             -v "${PWD}:/work" \
             -w /work \
-            graphviz/graphviz \
+            graphviz/graphviz:9.0.0 \
             dot -Tpng tfplan.dot -o tfplan.png
 
       - name: Upload plan and graph as artifacts
