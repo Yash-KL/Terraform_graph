@@ -1,4 +1,4 @@
-name: Terraform GCP with Graphviz Approval (Docker)
+name: Terraform GCP with Graphviz Approval
 
 on:
   workflow_dispatch:
@@ -48,7 +48,6 @@ jobs:
         working-directory: ${{ env.TF_WORKING_DIR }}
         run: terraform graph -plan=tfplan.binary > tfplan.dot
 
-
       - name: Install Graphviz
         run: sudo apt-get update && sudo apt-get install -y graphviz
 
@@ -56,17 +55,22 @@ jobs:
         working-directory: ${{ env.TF_WORKING_DIR }}
         run: dot -Tpng tfplan.dot -o tfplan.png
 
+      # ✅ INLINE GRAPH IN SUMMARY (THIS IS THE KEY PART)
       - name: Show Terraform graph in workflow summary
         working-directory: ${{ env.TF_WORKING_DIR }}
         run: |
-          echo "## Terraform Resource Graph (Plan Preview)" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "<details><summary>Click to expand graph</summary>" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo '<img src="data:image/png;base64,'$(base64 -w 0 tfplan.png)'" />' >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "</details>" >> $GITHUB_STEP_SUMMARY
+          GRAPH_BASE64=$(base64 -w 0 tfplan.png)
 
+          cat <<EOF >> $GITHUB_STEP_SUMMARY
+## Terraform Resource Graph (Plan Preview)
+
+<details>
+<summary>Click to expand graph</summary>
+
+<img src="data:image/png;base64,${GRAPH_BASE64}" />
+
+</details>
+EOF
 
       - name: Upload plan and graph as artifacts
         uses: actions/upload-artifact@v4
@@ -79,54 +83,40 @@ jobs:
             ${{ env.TF_WORKING_DIR }}/tfplan.png
           retention-days: 7
 
-      - name: Add summary
+      - name: Add text summary
         run: |
           echo "✅ Terraform plan & graph generated." >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "- Download artifact: **terraform-plan-and-graph**" >> $GITHUB_STEP_SUMMARY
-          echo "- Open **tfplan.png** to review the resource graph." >> $GITHUB_STEP_SUMMARY
+          echo "- Artifact: **terraform-plan-and-graph**" >> $GITHUB_STEP_SUMMARY
+          echo "- Review the graph above before approval." >> $GITHUB_STEP_SUMMARY
           echo "- Once approved, rerun workflow with input: \`apply\`." >> $GITHUB_STEP_SUMMARY
 
   terraform-apply:
     if: ${{ github.event.inputs.action == 'apply' }}
     runs-on: ubuntu-latest
 
-    # Environment gate for manual approval in GitHub UI
+    # ✅ Manual approval gate
     environment:
-      name: production  # configure this in repo settings with required reviewers
+      name: production
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
 
       - name: Set up Terraform
         uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: 1.9.5
 
-      - name: Write GCP credentials to file
-        run: |
-          printf '%s' "${{ secrets.GCP_SA_KEY }}" > gcp-key.json
-          chmod 600 gcp-key.json
-
-      - name: Verify credentials file
-        run: |
-          echo "File size: $(wc -c < gcp-key.json) bytes"
-          if ! jq empty gcp-key.json 2>/dev/null; then
-            echo "ERROR: gcp-key.json is not valid JSON"
-            exit 1
-          fi
-          echo "✓ Valid JSON"
-
-      - name: Export GOOGLE_APPLICATION_CREDENTIALS
-        run: |
-          echo "GOOGLE_APPLICATION_CREDENTIALS=$GITHUB_WORKSPACE/gcp-key.json" >> $GITHUB_ENV
-
       - name: Terraform Init
         working-directory: ${{ env.TF_WORKING_DIR }}
         run: terraform init
 
-      # Optional extra safety: re-run plan before apply
       - name: Terraform Plan (for apply)
         working-directory: ${{ env.TF_WORKING_DIR }}
         run: terraform plan -out=tfplan-for-apply.binary
