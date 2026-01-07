@@ -1,0 +1,119 @@
+name: Terraform GCP with Graphviz Approval (Docker)
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: "Select what to run"
+        required: true
+        default: "plan"
+        type: choice
+        options:
+          - plan
+          - apply
+
+env:
+  TF_WORKING_DIR: .
+  GOOGLE_APPLICATION_CREDENTIALS: ${{ github.workspace }}/gcp-key.json
+
+jobs:
+  terraform-plan-and-graph:
+    if: ${{ github.event.inputs.action == 'plan' }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.9.5
+
+      - name: Write GCP credentials to file
+        run: |
+          echo '${{ secrets.GCP_CREDENTIALS }}' > gcp-key.json
+
+      - name: Export GOOGLE_APPLICATION_CREDENTIALS
+        run: |
+          echo "GOOGLE_APPLICATION_CREDENTIALS=$GOOGLE_APPLICATION_CREDENTIALS" >> $GITHUB_ENV
+
+      - name: Terraform Init
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        run: terraform init
+
+      - name: Terraform Plan (save to file)
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        run: |
+          terraform plan -out=tfplan.binary
+          terraform show -json tfplan.binary > tfplan.json
+
+      - name: Terraform Graph (create DOT)
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        run: terraform graph -plan=tfplan.binary > tfplan.dot
+
+      - name: Generate Graph PNG using Graphviz Docker
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        run: |
+          docker run --rm \
+            -v "${PWD}:/work" \
+            -w /work \
+            graphviz/graphviz \
+            dot -Tpng tfplan.dot -o tfplan.png
+
+      - name: Upload plan and graph as artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: terraform-plan-and-graph
+          path: |
+            ${{ env.TF_WORKING_DIR }}/tfplan.binary
+            ${{ env.TF_WORKING_DIR }}/tfplan.json
+            ${{ env.TF_WORKING_DIR }}/tfplan.dot
+            ${{ env.TF_WORKING_DIR }}/tfplan.png
+          retention-days: 7
+
+      - name: Add summary
+        run: |
+          echo "✅ Terraform plan & graph generated." >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- Download artifact: **terraform-plan-and-graph**" >> $GITHUB_STEP_SUMMARY
+          echo "- Open **tfplan.png** to review the resource graph." >> $GITHUB_STEP_SUMMARY
+          echo "- Once approved, rerun workflow with input: \`apply\`." >> $GITHUB_STEP_SUMMARY
+
+  terraform-apply:
+    if: ${{ github.event.inputs.action == 'apply' }}
+    runs-on: ubuntu-latest
+
+    # Environment gate for manual approval in GitHub UI
+    environment:
+      name: production  # configure this in repo settings with required reviewers
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.9.5
+
+      - name: Write GCP credentials to file
+        run: |
+          echo '${{ secrets.GCP_CREDENTIALS }}' > gcp-key.json
+
+      - name: Export GOOGLE_APPLICATION_CREDENTIALS
+        run: |
+          echo "GOOGLE_APPLICATION_CREDENTIALS=$GOOGLE_APPLICATION_CREDENTIALS" >> $GITHUB_ENV
+
+      - name: Terraform Init
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        run: terraform init
+
+      # Optional extra safety: re-run plan before apply
+      - name: Terraform Plan (for apply)
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        run: terraform plan -out=tfplan-for-apply.binary
+
+      - name: Terraform Apply
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        run: terraform apply -auto-approve tfplan-for-apply.binary
