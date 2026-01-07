@@ -1,117 +1,148 @@
-name: Terraform PR Plan + Graph
+name: Terraform GCP – Immutable Plan with Approval & Colored Graph
 
 on:
-  pull_request:
-    branches: [ main ]
+  workflow_dispatch:
+    inputs:
+      action:
+        description: "Select what to run"
+        required: true
+        default: "plan"
+        type: choice
+        options:
+          - plan
+          - apply
 
 env:
   TF_WORKING_DIR: .
+  TF_VERSION: 1.9.5
 
 jobs:
   terraform-plan:
+    if: ${{ github.event.inputs.action == 'plan' }}
     runs-on: ubuntu-latest
 
-    permissions:
-      contents: read
-      pull-requests: write
-
     steps:
-      # -------------------------------------------------
-      # Checkout
-      # -------------------------------------------------
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # -------------------------------------------------
-      # Authenticate to Google Cloud
-      # -------------------------------------------------
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v2
         with:
           credentials_json: ${{ secrets.GCP_SA_KEY }}
 
-      # -------------------------------------------------
-      # Terraform setup
-      # -------------------------------------------------
-      - name: Set up Terraform
+      - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
         with:
-          terraform_version: 1.9.5
+          terraform_version: ${{ env.TF_VERSION }}
 
       - name: Terraform Init
         working-directory: ${{ env.TF_WORKING_DIR }}
         run: terraform init
 
-      # -------------------------------------------------
-      # Terraform Plan
-      # -------------------------------------------------
-      - name: Terraform Plan
+      - name: Terraform Validate
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        run: terraform validate
+
+      - name: Terraform Plan (immutable)
         working-directory: ${{ env.TF_WORKING_DIR }}
         run: |
           terraform plan -out=tfplan.binary
           terraform show -json tfplan.binary > tfplan.json
 
-      # -------------------------------------------------
-      # Install Graphviz
-      # -------------------------------------------------
+      - name: Generate Terraform Graph (DOT)
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        run: terraform graph -plan=tfplan.binary > tfplan.raw.dot
+
+      - name: Colorize Graph (Add / Change / Destroy)
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        run: |
+          ADDED=$(jq -r '.resource_changes[] | select(.change.actions==["create"]) | .address' tfplan.json)
+          CHANGED=$(jq -r '.resource_changes[] | select(.change.actions|index("update")) | .address' tfplan.json)
+          DESTROYED=$(jq -r '.resource_changes[] | select(.change.actions==["delete"]) | .address' tfplan.json)
+
+          cp tfplan.raw.dot tfplan.colored.dot
+
+          for r in $ADDED; do
+            sed -i "s|\"$r\"|\"$r\" [color=green, style=filled]|" tfplan.colored.dot
+          done
+
+          for r in $CHANGED; do
+            sed -i "s|\"$r\"|\"$r\" [color=orange, style=filled]|" tfplan.colored.dot
+          done
+
+          for r in $DESTROYED; do
+            sed -i "s|\"$r\"|\"$r\" [color=red, style=filled]|" tfplan.colored.dot
+          done
+
       - name: Install Graphviz
         run: sudo apt-get update && sudo apt-get install -y graphviz
 
-      # -------------------------------------------------
-      # Generate Colorful Terraform Graph
-      # -------------------------------------------------
-      - name: Generate Terraform graph (colorful)
+      - name: Generate Graph PNG
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        run: dot -Tpng tfplan.colored.dot -o tfplan.png
+
+      - name: Show graph in workflow summary
         working-directory: ${{ env.TF_WORKING_DIR }}
         run: |
-          terraform graph -plan=tfplan.binary \
-          | sed 's/graph \[/graph [rankdir=LR, bgcolor="white", /' \
-          > tfplan.dot
+          GRAPH_BASE64=$(base64 -w 0 tfplan.png)
 
-          dot -Tpng \
-            -Nstyle=filled \
-            -Nfillcolor="#E3F2FD" \
-            -Ncolor="#1565C0" \
-            -Ecolor="#90CAF9" \
-            tfplan.dot -o tfplan.png
+          printf '%s\n' \
+          '## Terraform Resource Graph (Colored Plan)' \
+          '' \
+          '**Legend:**' \
+          '- 🟢 Add' \
+          '- 🟡 Change' \
+          '- 🔴 Destroy' \
+          '' \
+          "<img src=\"data:image/png;base64,${GRAPH_BASE64}\" />" \
+          >> "$GITHUB_STEP_SUMMARY"
 
-      # -------------------------------------------------
-      # Upload artifacts
-      # -------------------------------------------------
-      - name: Upload plan and graph artifacts
+      - name: Upload approved plan & graph
         uses: actions/upload-artifact@v4
         with:
-          name: terraform-plan-and-graph
+          name: terraform-approved-plan
           path: |
-            tfplan.binary
-            tfplan.json
-            tfplan.dot
-            tfplan.png
+            ${{ env.TF_WORKING_DIR }}/tfplan.binary
+            ${{ env.TF_WORKING_DIR }}/tfplan.json
+            ${{ env.TF_WORKING_DIR }}/tfplan.colored.dot
+            ${{ env.TF_WORKING_DIR }}/tfplan.png
+          retention-days: 7
 
-      # -------------------------------------------------
-      # Comment on PR (graph only)
-      # -------------------------------------------------
-      - name: Comment on PR with graph info
-        uses: actions/github-script@v7
+      - name: Summary
+        run: |
+          echo "✅ Terraform plan generated and locked." >> $GITHUB_STEP_SUMMARY
+          echo "🛑 Apply will ONLY use this approved plan." >> $GITHUB_STEP_SUMMARY
+
+  terraform-apply:
+    if: ${{ github.event.inputs.action == 'apply' }}
+    runs-on: ubuntu-latest
+
+    environment:
+      name: production
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download approved plan
+        uses: actions/download-artifact@v4
         with:
-          script: |
-            const body = `
-## Terraform Plan – Infrastructure Graph
+          name: terraform-approved-plan
 
-A Terraform plan has been generated for this PR.
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
 
-📦 **Artifacts**
-Download **terraform-plan-and-graph**
-and open **tfplan.png** to visually review the infrastructure changes.
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
 
-🔗 **Workflow run**
-https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}
+      - name: Terraform Init
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        run: terraform init
 
-✅ Please review the graph and approve this PR.
-`;
-
-            await github.rest.issues.createComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.issue.number,
-              body
-            });
+      - name: Terraform Apply (approved plan only)
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        run: terraform apply -auto-approve tfplan.binary
