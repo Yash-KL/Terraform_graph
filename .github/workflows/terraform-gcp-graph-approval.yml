@@ -55,22 +55,20 @@ jobs:
         working-directory: ${{ env.TF_WORKING_DIR }}
         run: dot -Tpng tfplan.dot -o tfplan.png
 
-      # ✅ INLINE GRAPH IN SUMMARY (THIS IS THE KEY PART)
       - name: Show Terraform graph in workflow summary
         working-directory: ${{ env.TF_WORKING_DIR }}
         run: |
           GRAPH_BASE64=$(base64 -w 0 tfplan.png)
 
-          cat <<EOF >> $GITHUB_STEP_SUMMARY
-## Terraform Resource Graph (Plan Preview)
-
-<details>
-<summary>Click to expand graph</summary>
-
-<img src="data:image/png;base64,${GRAPH_BASE64}" />
-
-</details>
-EOF
+          printf '%s\n' \
+          '## Terraform Resource Graph (Plan Preview)' \
+          '' \
+          '<details>' \
+          '<summary>Click to expand graph</summary>' \
+          '' \
+          "<img src=\"data:image/png;base64,${GRAPH_BASE64}\" />" \
+          '' \
+          '</details>' >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload plan and graph as artifacts
         uses: actions/upload-artifact@v4
@@ -86,16 +84,13 @@ EOF
       - name: Add text summary
         run: |
           echo "✅ Terraform plan & graph generated." >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "- Artifact: **terraform-plan-and-graph**" >> $GITHUB_STEP_SUMMARY
           echo "- Review the graph above before approval." >> $GITHUB_STEP_SUMMARY
-          echo "- Once approved, rerun workflow with input: \`apply\`." >> $GITHUB_STEP_SUMMARY
+          echo "- Rerun workflow with input: \`apply\` after approval." >> $GITHUB_STEP_SUMMARY
 
   terraform-apply:
     if: ${{ github.event.inputs.action == 'apply' }}
     runs-on: ubuntu-latest
 
-    # ✅ Manual approval gate
     environment:
       name: production
 
