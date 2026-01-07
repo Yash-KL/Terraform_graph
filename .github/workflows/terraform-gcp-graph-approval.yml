@@ -56,6 +56,12 @@ jobs:
         working-directory: ${{ env.TF_WORKING_DIR }}
         run: dot -Tpng tfplan.dot -o tfplan.png
 
+      - name: Show graph in workflow summary
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        run: |
+          echo "## Terraform Resource Graph" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "![Terraform Graph](tfplan.png)" >> $GITHUB_STEP_SUMMARY
 
       - name: Upload plan and graph as artifacts
         uses: actions/upload-artifact@v4
