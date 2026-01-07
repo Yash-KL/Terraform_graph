@@ -1,4 +1,4 @@
-name: Terraform PR Plan + Graph + Cost
+name: Terraform PR Plan + Graph
 
 on:
   pull_request:
@@ -16,20 +16,23 @@ jobs:
       pull-requests: write
 
     steps:
+      # -------------------------------------------------
+      # Checkout
+      # -------------------------------------------------
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # ---------------------------
-      # GCP Authentication
-      # ---------------------------
+      # -------------------------------------------------
+      # Authenticate to Google Cloud
+      # -------------------------------------------------
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v2
         with:
           credentials_json: ${{ secrets.GCP_SA_KEY }}
 
-      # ---------------------------
-      # Terraform Setup
-      # ---------------------------
+      # -------------------------------------------------
+      # Terraform setup
+      # -------------------------------------------------
       - name: Set up Terraform
         uses: hashicorp/setup-terraform@v3
         with:
@@ -39,34 +42,25 @@ jobs:
         working-directory: ${{ env.TF_WORKING_DIR }}
         run: terraform init
 
+      # -------------------------------------------------
+      # Terraform Plan
+      # -------------------------------------------------
       - name: Terraform Plan
         working-directory: ${{ env.TF_WORKING_DIR }}
         run: |
           terraform plan -out=tfplan.binary
           terraform show -json tfplan.binary > tfplan.json
 
-      # ---------------------------
-      # Terraform Diff Summary
-      # ---------------------------
-      - name: Terraform diff summary
-        id: diff
-        working-directory: ${{ env.TF_WORKING_DIR }}
-        run: |
-          ADDED=$(jq '[.resource_changes[] | select(.change.actions | index("create"))] | length' tfplan.json)
-          CHANGED=$(jq '[.resource_changes[] | select(.change.actions | index("update"))] | length' tfplan.json)
-          DESTROYED=$(jq '[.resource_changes[] | select(.change.actions | index("delete"))] | length' tfplan.json)
-
-          echo "added=$ADDED" >> $GITHUB_OUTPUT
-          echo "changed=$CHANGED" >> $GITHUB_OUTPUT
-          echo "destroyed=$DESTROYED" >> $GITHUB_OUTPUT
-
-      # ---------------------------
-      # Graphviz (Colorful Graph)
-      # ---------------------------
+      # -------------------------------------------------
+      # Install Graphviz
+      # -------------------------------------------------
       - name: Install Graphviz
         run: sudo apt-get update && sudo apt-get install -y graphviz
 
-      - name: Generate Terraform graph (styled)
+      # -------------------------------------------------
+      # Generate Colorful Terraform Graph
+      # -------------------------------------------------
+      - name: Generate Terraform graph (colorful)
         working-directory: ${{ env.TF_WORKING_DIR }}
         run: |
           terraform graph -plan=tfplan.binary \
@@ -79,54 +73,40 @@ jobs:
             -Ncolor="#1565C0" \
             -Ecolor="#90CAF9" \
             tfplan.dot -o tfplan.png
-      # ---------------------------
-      # Upload Artifacts
-      # ---------------------------
-      - name: Upload plan, graph and cost as artifacts
+
+      # -------------------------------------------------
+      # Upload artifacts
+      # -------------------------------------------------
+      - name: Upload plan and graph artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: terraform-plan-graph-cost
+          name: terraform-plan-and-graph
           path: |
             tfplan.binary
             tfplan.json
             tfplan.dot
             tfplan.png
-            infracost.json
-          retention-days: 7
 
-      # ---------------------------
-      # PR Comment (Single Source of Truth)
-      # ---------------------------
-      - name: Comment on PR with plan & cost summary
+      # -------------------------------------------------
+      # Comment on PR (graph only)
+      # -------------------------------------------------
+      - name: Comment on PR with graph info
         uses: actions/github-script@v7
         with:
           script: |
-            const added = "${{ steps.diff.outputs.added }}";
-            const changed = "${{ steps.diff.outputs.changed }}";
-            const destroyed = "${{ steps.diff.outputs.destroyed }}";
-            const monthly = "${{ steps.cost.outputs.monthly }}";
-
-            const runUrl =
-              `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
-
             const body = `
-## Terraform Plan Review
+## Terraform Plan – Infrastructure Graph
 
-### Resource changes
-- 🟢 **Add:** ${added}
-- 🟡 **Change:** ${changed}
-- 🔴 **Destroy:** ${destroyed}
+A Terraform plan has been generated for this PR.
 
-### Estimated Monthly Cost
-- 💰 **$${monthly} / month**
+📦 **Artifacts**
+Download **terraform-plan-and-graph**
+and open **tfplan.png** to visually review the infrastructure changes.
 
-### Visual Graph
-Download artifact **terraform-plan-graph-cost**  
-Open **tfplan.png** to view the architecture graph.
+🔗 **Workflow run**
+https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}
 
-🔗 **Workflow run:** ${runUrl}
-
-✅ Please review before approving this PR.
+✅ Please review the graph and approve this PR.
 `;
 
             await github.rest.issues.createComment({
