@@ -1,16 +1,13 @@
-name: Terraform GCP – Immutable Plan with Approval & Colored Graph
+name: Terraform Plan with Graph (PR Review)
 
 on:
-  workflow_dispatch:
-    inputs:
-      action:
-        description: "Select what to run"
-        required: true
-        default: "plan"
-        type: choice
-        options:
-          - plan
-          - apply
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+  pull-requests: write
 
 env:
   TF_WORKING_DIR: .
@@ -18,7 +15,6 @@ env:
 
 jobs:
   terraform-plan:
-    if: ${{ github.event.inputs.action == 'plan' }}
     runs-on: ubuntu-latest
 
     steps:
@@ -43,7 +39,7 @@ jobs:
         working-directory: ${{ env.TF_WORKING_DIR }}
         run: terraform validate
 
-      - name: Terraform Plan (immutable)
+      - name: Terraform Plan
         working-directory: ${{ env.TF_WORKING_DIR }}
         run: |
           terraform plan -out=tfplan.binary
@@ -51,100 +47,71 @@ jobs:
 
       - name: Generate Terraform Graph (DOT)
         working-directory: ${{ env.TF_WORKING_DIR }}
-        run: terraform graph -plan=tfplan.binary > tfplan.raw.dot
+        run: terraform graph -plan=tfplan.binary > tfplan.dot
 
+      - name: Install Graphviz
+        run: sudo apt-get update && sudo apt-get install -y graphviz
 
+      - name: Generate Graph PNG
+        working-directory: ${{ env.TF_WORKING_DIR }}
+        run: dot -Tpng tfplan.dot -o tfplan.png
 
-      - name: Colorize Graph (SAFE – Add / Change / Destroy)
+      - name: Show graph in workflow summary
         working-directory: ${{ env.TF_WORKING_DIR }}
         run: |
-          set -e
+          GRAPH_BASE64=$(base64 -w 0 tfplan.png)
 
-          ADDED=$(jq -r '.resource_changes[] | select(.change.actions==["create"]) | .address' tfplan.json)
-          CHANGED=$(jq -r '.resource_changes[] | select(.change.actions|index("update")) | .address' tfplan.json)
-          DESTROYED=$(jq -r '.resource_changes[] | select(.change.actions==["delete"]) | .address' tfplan.json)
+          printf '%s\n' \
+          '## Terraform Resource Graph (Plan Preview)' \
+          '' \
+          '**Legend:**' \
+          '- 🟢 Add' \
+          '- 🟡 Change' \
+          '- 🔴 Destroy' \
+          '' \
+          "<img src=\"data:image/png;base64,${GRAPH_BASE64}\" />" \
+          >> "$GITHUB_STEP_SUMMARY"
 
-          echo 'digraph terraform {' > tfplan.colored.dot
-
-          if [ -n "$ADDED" ]; then
-            echo 'subgraph cluster_add {' >> tfplan.colored.dot
-            echo 'label="Add"; color=green;' >> tfplan.colored.dot
-            for r in $ADDED; do echo "\"$r\";" >> tfplan.colored.dot; done
-            echo '}' >> tfplan.colored.dot
-          fi
-
-          if [ -n "$CHANGED" ]; then
-            echo 'subgraph cluster_change {' >> tfplan.colored.dot
-            echo 'label="Change"; color=orange;' >> tfplan.colored.dot
-            for r in $CHANGED; do echo "\"$r\";" >> tfplan.colored.dot; done
-            echo '}' >> tfplan.colored.dot
-          fi
-
-          if [ -n "$DESTROYED" ]; then
-            echo 'subgraph cluster_destroy {' >> tfplan.colored.dot
-            echo 'label="Destroy"; color=red;' >> tfplan.colored.dot
-            for r in $DESTROYED; do echo "\"$r\";" >> tfplan.colored.dot; done
-            echo '}' >> tfplan.colored.dot
-          fi
-
-          # Append original edges (SAFE)
-          grep -- '->' tfplan.raw.dot >> tfplan.colored.dot
-
-          echo '}' >> tfplan.colored.dot
-
-
-
-
-
-
-
-      
-      - name: Upload approved plan & graph
+      - name: Upload plan & graph artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: terraform-approved-plan
+          name: terraform-plan-graph
           path: |
-            ${{ env.TF_WORKING_DIR }}/tfplan.binary
-            ${{ env.TF_WORKING_DIR }}/tfplan.json
-            ${{ env.TF_WORKING_DIR }}/tfplan.colored.dot
-            ${{ env.TF_WORKING_DIR }}/tfplan.png
-          retention-days: 7
+            tfplan.binary
+            tfplan.json
+            tfplan.dot
+            tfplan.png
+          retention-days: 5
 
-      - name: Summary
-        run: |
-          echo "✅ Terraform plan generated and locked." >> $GITHUB_STEP_SUMMARY
-          echo "🛑 Apply will ONLY use this approved plan." >> $GITHUB_STEP_SUMMARY
-
-  terraform-apply:
-    if: ${{ github.event.inputs.action == 'apply' }}
-    runs-on: ubuntu-latest
-
-    environment:
-      name: production
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Download approved plan
-        uses: actions/download-artifact@v4
+      - name: Comment graph on PR
+        uses: actions/github-script@v7
         with:
-          name: terraform-approved-plan
+          script: |
+            const fs = require('fs');
 
-      - name: Authenticate to Google Cloud
-        uses: google-github-actions/auth@v2
-        with:
-          credentials_json: ${{ secrets.GCP_SA_KEY }}
+            const image = fs.readFileSync('tfplan.png', { encoding: 'base64' });
 
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_version: ${{ env.TF_VERSION }}
+            const body = `
+              ### Terraform Plan – Resource Graph
 
-      - name: Terraform Init
-        working-directory: ${{ env.TF_WORKING_DIR }}
-        run: terraform init
+              **Legend**
+              - 🟢 Add
+              - 🟡 Change
+              - 🔴 Destroy
 
-      - name: Terraform Apply (approved plan only)
-        working-directory: ${{ env.TF_WORKING_DIR }}
-        run: terraform apply -auto-approve tfplan.binary
+                <details>
+                <summary>Click to expand graph</summary>
+
+                <img src="data:image/png;base64,${image}" />
+
+                </details>
+
+                ⚠️ Please review the graph before approving this PR.
+                `;
+
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: body
+            });
