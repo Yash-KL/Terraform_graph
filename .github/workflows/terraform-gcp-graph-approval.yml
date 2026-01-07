@@ -56,12 +56,16 @@ jobs:
         working-directory: ${{ env.TF_WORKING_DIR }}
         run: dot -Tpng tfplan.dot -o tfplan.png
 
-      - name: Show graph in workflow summary
+      - name: Show Terraform graph in workflow summary
         working-directory: ${{ env.TF_WORKING_DIR }}
         run: |
-          echo "## Terraform Resource Graph" >> $GITHUB_STEP_SUMMARY
+          echo "## Terraform Resource Graph (Plan Preview)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "<details><summary>Click to expand graph</summary>" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo '<img src="data:image/png;base64,'$(base64 -w 0 tfplan.png)'" />' >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "</details>" >> $GITHUB_STEP_SUMMARY
 
 
       - name: Upload plan and graph as artifacts
