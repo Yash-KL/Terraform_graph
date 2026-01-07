@@ -24,28 +24,15 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
       - name: Set up Terraform
         uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: 1.9.5
-
-      - name: Write GCP credentials to file
-        run: |
-          printf '%s' "${{ secrets.GCP_SA_KEY }}" > gcp-key.json
-          chmod 600 gcp-key.json
-
-      - name: Verify credentials file
-        run: |
-          echo "File size: $(wc -c < gcp-key.json) bytes"
-          if ! jq empty gcp-key.json 2>/dev/null; then
-            echo "ERROR: gcp-key.json is not valid JSON"
-            exit 1
-          fi
-          echo "✓ Valid JSON"
-
-      - name: Export GOOGLE_APPLICATION_CREDENTIALS
-        run: |
-          echo "GOOGLE_APPLICATION_CREDENTIALS=$GITHUB_WORKSPACE/gcp-key.json" >> $GITHUB_ENV
 
       - name: Terraform Init
         working-directory: ${{ env.TF_WORKING_DIR }}
