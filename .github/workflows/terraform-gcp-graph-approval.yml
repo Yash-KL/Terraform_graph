@@ -14,7 +14,6 @@ on:
 
 env:
   TF_WORKING_DIR: .
-  GOOGLE_APPLICATION_CREDENTIALS: ${{ github.workspace }}/gcp-key.json
 
 jobs:
   terraform-plan-and-graph:
@@ -35,9 +34,18 @@ jobs:
           printf '%s' "${{ secrets.GCP_SA_KEY }}" > gcp-key.json
           chmod 600 gcp-key.json
 
+      - name: Verify credentials file
+        run: |
+          echo "File size: $(wc -c < gcp-key.json) bytes"
+          if ! jq empty gcp-key.json 2>/dev/null; then
+            echo "ERROR: gcp-key.json is not valid JSON"
+            exit 1
+          fi
+          echo "✓ Valid JSON"
+
       - name: Export GOOGLE_APPLICATION_CREDENTIALS
         run: |
-          echo "GOOGLE_APPLICATION_CREDENTIALS=$GOOGLE_APPLICATION_CREDENTIALS" >> $GITHUB_ENV
+          echo "GOOGLE_APPLICATION_CREDENTIALS=$GITHUB_WORKSPACE/gcp-key.json" >> $GITHUB_ENV
 
       - name: Terraform Init
         working-directory: ${{ env.TF_WORKING_DIR }}
@@ -103,9 +111,18 @@ jobs:
           printf '%s' "${{ secrets.GCP_SA_KEY }}" > gcp-key.json
           chmod 600 gcp-key.json
 
+      - name: Verify credentials file
+        run: |
+          echo "File size: $(wc -c < gcp-key.json) bytes"
+          if ! jq empty gcp-key.json 2>/dev/null; then
+            echo "ERROR: gcp-key.json is not valid JSON"
+            exit 1
+          fi
+          echo "✓ Valid JSON"
+
       - name: Export GOOGLE_APPLICATION_CREDENTIALS
         run: |
-          echo "GOOGLE_APPLICATION_CREDENTIALS=$GOOGLE_APPLICATION_CREDENTIALS" >> $GITHUB_ENV
+          echo "GOOGLE_APPLICATION_CREDENTIALS=$GITHUB_WORKSPACE/gcp-key.json" >> $GITHUB_ENV
 
       - name: Terraform Init
         working-directory: ${{ env.TF_WORKING_DIR }}
