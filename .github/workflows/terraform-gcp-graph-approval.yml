@@ -1,34 +1,35 @@
-name: Terraform GCP with Graphviz Approval
+name: Terraform PR Plan + Graph + Cost
 
 on:
-  workflow_dispatch:
-    inputs:
-      action:
-        description: "Select what to run"
-        required: true
-        default: "plan"
-        type: choice
-        options:
-          - plan
-          - apply
+  pull_request:
+    branches: [ main ]
 
 env:
   TF_WORKING_DIR: .
 
 jobs:
-  terraform-plan-and-graph:
-    if: ${{ github.event.inputs.action == 'plan' }}
+  terraform-plan:
     runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      pull-requests: write
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      # ---------------------------
+      # GCP Authentication
+      # ---------------------------
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v2
         with:
           credentials_json: ${{ secrets.GCP_SA_KEY }}
 
+      # ---------------------------
+      # Terraform Setup
+      # ---------------------------
       - name: Set up Terraform
         uses: hashicorp/setup-terraform@v3
         with:
@@ -38,84 +39,99 @@ jobs:
         working-directory: ${{ env.TF_WORKING_DIR }}
         run: terraform init
 
-      - name: Terraform Plan (save to file)
+      - name: Terraform Plan
         working-directory: ${{ env.TF_WORKING_DIR }}
         run: |
           terraform plan -out=tfplan.binary
           terraform show -json tfplan.binary > tfplan.json
 
-      - name: Terraform Graph (create DOT)
+      # ---------------------------
+      # Terraform Diff Summary
+      # ---------------------------
+      - name: Terraform diff summary
+        id: diff
         working-directory: ${{ env.TF_WORKING_DIR }}
-        run: terraform graph -plan=tfplan.binary > tfplan.dot
+        run: |
+          ADDED=$(jq '[.resource_changes[] | select(.change.actions | index("create"))] | length' tfplan.json)
+          CHANGED=$(jq '[.resource_changes[] | select(.change.actions | index("update"))] | length' tfplan.json)
+          DESTROYED=$(jq '[.resource_changes[] | select(.change.actions | index("delete"))] | length' tfplan.json)
 
+          echo "added=$ADDED" >> $GITHUB_OUTPUT
+          echo "changed=$CHANGED" >> $GITHUB_OUTPUT
+          echo "destroyed=$DESTROYED" >> $GITHUB_OUTPUT
+
+      # ---------------------------
+      # Graphviz (Colorful Graph)
+      # ---------------------------
       - name: Install Graphviz
         run: sudo apt-get update && sudo apt-get install -y graphviz
 
-      - name: Generate Graph PNG
-        working-directory: ${{ env.TF_WORKING_DIR }}
-        run: dot -Tpng tfplan.dot -o tfplan.png
-
-      - name: Show Terraform graph in workflow summary
+      - name: Generate Terraform graph (styled)
         working-directory: ${{ env.TF_WORKING_DIR }}
         run: |
-          GRAPH_BASE64=$(base64 -w 0 tfplan.png)
+          terraform graph -plan=tfplan.binary \
+          | sed 's/graph \[/graph [rankdir=LR, bgcolor="white", /' \
+          > tfplan.dot
 
-          printf '%s\n' \
-          '## Terraform Resource Graph (Plan Preview)' \
-          '' \
-          '<details>' \
-          '<summary>Click to expand graph</summary>' \
-          '' \
-          "<img src=\"data:image/png;base64,${GRAPH_BASE64}\" />" \
-          '' \
-          '</details>' >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Upload plan and graph as artifacts
+          dot -Tpng \
+            -Nstyle=filled \
+            -Nfillcolor="#E3F2FD" \
+            -Ncolor="#1565C0" \
+            -Ecolor="#90CAF9" \
+            tfplan.dot -o tfplan.png
+      # ---------------------------
+      # Upload Artifacts
+      # ---------------------------
+      - name: Upload plan, graph and cost as artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: terraform-plan-and-graph
+          name: terraform-plan-graph-cost
           path: |
-            ${{ env.TF_WORKING_DIR }}/tfplan.binary
-            ${{ env.TF_WORKING_DIR }}/tfplan.json
-            ${{ env.TF_WORKING_DIR }}/tfplan.dot
-            ${{ env.TF_WORKING_DIR }}/tfplan.png
+            tfplan.binary
+            tfplan.json
+            tfplan.dot
+            tfplan.png
+            infracost.json
           retention-days: 7
 
-      - name: Add text summary
-        run: |
-          echo "✅ Terraform plan & graph generated." >> $GITHUB_STEP_SUMMARY
-          echo "- Review the graph above before approval." >> $GITHUB_STEP_SUMMARY
-          echo "- Rerun workflow with input: \`apply\` after approval." >> $GITHUB_STEP_SUMMARY
-
-  terraform-apply:
-    if: ${{ github.event.inputs.action == 'apply' }}
-    runs-on: ubuntu-latest
-
-    environment:
-      name: production
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Authenticate to Google Cloud
-        uses: google-github-actions/auth@v2
+      # ---------------------------
+      # PR Comment (Single Source of Truth)
+      # ---------------------------
+      - name: Comment on PR with plan & cost summary
+        uses: actions/github-script@v7
         with:
-          credentials_json: ${{ secrets.GCP_SA_KEY }}
+          script: |
+            const added = "${{ steps.diff.outputs.added }}";
+            const changed = "${{ steps.diff.outputs.changed }}";
+            const destroyed = "${{ steps.diff.outputs.destroyed }}";
+            const monthly = "${{ steps.cost.outputs.monthly }}";
 
-      - name: Set up Terraform
-        uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_version: 1.9.5
+            const runUrl =
+              `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
 
-      - name: Terraform Init
-        working-directory: ${{ env.TF_WORKING_DIR }}
-        run: terraform init
+            const body = `
+## Terraform Plan Review
 
-      - name: Terraform Plan (for apply)
-        working-directory: ${{ env.TF_WORKING_DIR }}
-        run: terraform plan -out=tfplan-for-apply.binary
+### Resource changes
+- 🟢 **Add:** ${added}
+- 🟡 **Change:** ${changed}
+- 🔴 **Destroy:** ${destroyed}
 
-      - name: Terraform Apply
-        working-directory: ${{ env.TF_WORKING_DIR }}
-        run: terraform apply -auto-approve tfplan-for-apply.binary
+### Estimated Monthly Cost
+- 💰 **$${monthly} / month**
+
+### Visual Graph
+Download artifact **terraform-plan-graph-cost**  
+Open **tfplan.png** to view the architecture graph.
+
+🔗 **Workflow run:** ${runUrl}
+
+✅ Please review before approving this PR.
+`;
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body
+            });
