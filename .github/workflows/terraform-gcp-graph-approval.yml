@@ -32,7 +32,8 @@ jobs:
 
       - name: Write GCP credentials to file
         run: |
-          echo '${{ secrets.GCP_CREDENTIALS }}' > gcp-key.json
+          printf '%s' "${{ secrets.GCP_SA_KEY }}" > gcp-key.json
+          chmod 600 gcp-key.json
 
       - name: Export GOOGLE_APPLICATION_CREDENTIALS
         run: |
@@ -99,7 +100,8 @@ jobs:
 
       - name: Write GCP credentials to file
         run: |
-          echo '${{ secrets.GCP_CREDENTIALS }}' > gcp-key.json
+          printf '%s' "${{ secrets.GCP_SA_KEY }}" > gcp-key.json
+          chmod 600 gcp-key.json
 
       - name: Export GOOGLE_APPLICATION_CREDENTIALS
         run: |
