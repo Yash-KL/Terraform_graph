@@ -1,24 +1,10 @@
-name: Terraform Plan with Graph + Apply (Approval)
+name: Terraform Plan with Colored Graph + Apply (Approval)
 
 on:
   pull_request:
-    branches:
-      - main
+    branches: [ main ]
 
   workflow_dispatch:
-    inputs:
-      reason:
-        description: "Why are you running this workflow?"
-        required: false
-        default: "Manual Terraform run"
-      run_apply:
-        description: "Run terraform apply (requires approval)"
-        required: false
-        default: "false"
-        type: choice
-        options:
-          - "false"
-          - "true"
 
 permissions:
   contents: read
@@ -30,30 +16,27 @@ env:
 
 jobs:
   # =========================================================
-  # PLAN JOB
+  # PLAN + GRAPH
   # =========================================================
   terraform-plan:
-    name: Terraform Plan + Graph
+    name: Terraform Plan + Colored Graph
     runs-on: ubuntu-latest
 
     steps:
-      # -------------------------------------------------
-      # Checkout
-      # -------------------------------------------------
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # -------------------------------------------------
-      # GCP Authentication
-      # -------------------------------------------------
+      # -----------------------------
+      # GCP Auth
+      # -----------------------------
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v2
         with:
           credentials_json: ${{ secrets.GCP_SA_KEY }}
 
-      # -------------------------------------------------
+      # -----------------------------
       # Terraform Setup
-      # -------------------------------------------------
+      # -----------------------------
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
         with:
@@ -67,18 +50,18 @@ jobs:
         working-directory: ${{ env.TF_WORKING_DIR }}
         run: terraform validate
 
-      # -------------------------------------------------
+      # -----------------------------
       # Terraform Plan
-      # -------------------------------------------------
+      # -----------------------------
       - name: Terraform Plan
         working-directory: ${{ env.TF_WORKING_DIR }}
         run: |
           terraform plan -out=tfplan.binary
           terraform show -json tfplan.binary > tfplan.json
 
-      # -------------------------------------------------
-      # Terraform Graph Generation
-      # -------------------------------------------------
+      # -----------------------------
+      # Graph Generation
+      # -----------------------------
       - name: Generate Terraform Graph (DOT)
         working-directory: ${{ env.TF_WORKING_DIR }}
         run: terraform graph -plan=tfplan.binary > tfplan.dot
@@ -86,67 +69,65 @@ jobs:
       - name: Install Graphviz
         run: sudo apt-get update && sudo apt-get install -y graphviz
 
-      - name: Generate Graph PNG
+      - name: Generate Colored Graph
         working-directory: ${{ env.TF_WORKING_DIR }}
-        run: dot -Tpng tfplan.dot -o tfplan.png
+        run: |
+          python scripts/colorize_tf_graph.py
+          dot -Tpng tfplan-colored.dot -o tfplan-colored.png
 
-      # -------------------------------------------------
-      # Show Graph in Workflow Summary
-      # -------------------------------------------------
-      - name: Show graph in workflow summary
+      # -----------------------------
+      # Workflow Summary
+      # -----------------------------
+      - name: Show graph info in workflow summary
         working-directory: ${{ env.TF_WORKING_DIR }}
         run: |
           {
             echo "## Terraform Resource Graph (Plan Preview)"
             echo ""
             echo "**Legend:**"
-            echo "- 🟢 Add"
-            echo "- 🟡 Change"
-            echo "- 🔴 Destroy"
+            echo "- 🟢 Green → New resources to be provisioned"
+            echo "- 🟡 Yellow → Existing resources changing"
+            echo "- 🔴 Red → Resources to be destroyed / replaced"
+            echo "- ⚪ Grey → No change / dependency only"
             echo ""
-            echo "### 📊 Graph"
-            echo ""
-            echo "➡️ Download and view the graph from workflow artifacts:"
-            echo ""  
-            echo "**Artifacts → terraform-plan-graph → tfplan.png**"
+            echo "📦 **Download graph:**"
+            echo "Artifacts → terraform-plan-graph → tfplan-colored.png"
           } >> "$GITHUB_STEP_SUMMARY"
 
-      # -------------------------------------------------
+      # -----------------------------
       # Upload Artifacts
-      # -------------------------------------------------
-      - name: Upload plan & graph artifacts
+      # -----------------------------
+      - name: Upload plan & colored graph
         uses: actions/upload-artifact@v4
         with:
           name: terraform-plan-graph
           path: |
             tfplan.binary
             tfplan.json
-            tfplan.dot
-            tfplan.png
+            tfplan-colored.png
+            tfplan-colored.dot
           retention-days: 5
 
-      # -------------------------------------------------
-      # Comment Graph on PR (PR runs only)
-      # -------------------------------------------------
-      - name: Comment graph on PR (PR runs only)
+      # -----------------------------
+      # PR Inline Comment (COLORED GRAPH)
+      # -----------------------------
+      - name: Comment colored graph on PR
+        if: github.event_name == 'pull_request'
         uses: actions/github-script@v7
         with:
           script: |
-            if (!context.issue || !context.issue.number) {
-              console.log('No pull request context found. Skipping PR comment.');
-              return;
-            }
-
             const fs = require('fs');
-            const image = fs.readFileSync('tfplan.png', { encoding: 'base64' });
+
+            const image = fs.readFileSync('tfplan-colored.png', { encoding: 'base64' });
 
             const body = `
-            ### Terraform Plan – Resource Graph
+            ### 🌈 Terraform Plan – Colored Resource Graph
 
             **Legend**
-            - 🟢 Add
-            - 🟡 Change
-            - 🔴 Destroy
+            - 🟢 New resources (Create)
+            - 🟡 Existing resources (Update)
+            - 🔴 Destroy / Replace
+            - ⚪ No change
 
             <details>
             <summary>Click to expand graph</summary>
@@ -155,88 +136,37 @@ jobs:
 
             </details>
 
-            ⚠️ Please review the graph before approving this PR.
+            ✅ Review the graph before approving this PR.
             `;
 
             github.rest.issues.createComment({
               issue_number: context.issue.number,
               owner: context.repo.owner,
               repo: context.repo.repo,
-              body: body
+              body
             });
 
-      # =================================================
-      # 💰 INFRACOST DIFF VS MAIN (COMMENTED)
-      # =================================================
-      # - name: Setup Infracost
-      #   uses: infracost/actions/setup@v3
-      #   with:
-      #     api-key: ${{ secrets.INFRACOST_API_KEY }}
-
-      # - name: Infracost breakdown (PR branch)
-      #   run: |
-      #     infracost breakdown \
-      #       --path=${{ env.TF_WORKING_DIR }} \
-      #       --format=json \
-      #       --out-file=infracost-pr.json
-
-      # - name: Checkout main branch
-      #   uses: actions/checkout@v4
-      #   with:
-      #     ref: main
-      #     path: main
-
-      # - name: Infracost breakdown (main)
-      #   run: |
-      #     infracost breakdown \
-      #       --path=main/${{ env.TF_WORKING_DIR }} \
-      #       --format=json \
-      #       --out-file=infracost-main.json
-
-      # - name: Infracost diff
-      #   run: |
-      #     infracost diff \
-      #       --path=infracost-main.json \
-      #       --compare-to=infracost-pr.json \
-      #       --format=json \
-      #       --out-file=infracost-diff.json
-
-      # - name: Post Infracost diff comment
-      #   uses: infracost/actions/comment@v2
-      #   with:
-      #     path: infracost-diff.json
-      #     behavior: update
-
   # =========================================================
-  # APPLY JOB (MANUAL APPROVAL REQUIRED)
+  # APPLY (MANUAL APPROVAL)
   # =========================================================
   terraform-apply:
     name: Terraform Apply (Environment Approval)
     runs-on: ubuntu-latest
     needs: terraform-plan
-    if: ${{ github.event.inputs.run_apply == 'true' }}
+    if: github.event_name == 'workflow_dispatch'
 
     environment:
-      name: terraform-apply   # 🔒 Configure reviewers in GitHub UI
+      name: terraform-apply
 
     steps:
-      # -------------------------------------------------
-      # Checkout
-      # -------------------------------------------------
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # -------------------------------------------------
-      # GCP Authentication
-      # -------------------------------------------------
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v2
         with:
           credentials_json: ${{ secrets.GCP_SA_KEY }}
 
-      # -------------------------------------------------
-      # Terraform Setup
-      # -------------------------------------------------
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
         with:
@@ -246,7 +176,7 @@ jobs:
         working-directory: ${{ env.TF_WORKING_DIR }}
         run: terraform init
 
-      - name: Download Terraform Plan Artifact
+      - name: Download plan artifact
         uses: actions/download-artifact@v4
         with:
           name: terraform-plan-graph
