@@ -96,18 +96,18 @@ jobs:
       - name: Show graph in workflow summary
         working-directory: ${{ env.TF_WORKING_DIR }}
         run: |
-          GRAPH_BASE64=$(base64 -w 0 tfplan.png)
-
-          printf '%s\n' \
-          '## Terraform Resource Graph (Plan Preview)' \
-          '' \
-          '**Legend:**' \
-          '- 🟢 Add' \
-          '- 🟡 Change' \
-          '- 🔴 Destroy' \
-          '' \
-          "<img src=\"data:image/png;base64,${GRAPH_BASE64}\" />" \
-          >> "$GITHUB_STEP_SUMMARY"
+          GRAPH_BASE64=$(base64 tfplan.png | tr -d '\n')
+          
+          {
+            echo "## Terraform Resource Graph (Plan Preview)"
+            echo ""
+            echo "**Legend:**"
+            echo "- 🟢 Add"
+            echo "- 🟡 Change"
+            echo "- 🔴 Destroy"
+            echo ""
+            echo "<img src=\"data:image/png;base64,${GRAPH_BASE64}\" />"
+          } >> "$GITHUB_STEP_SUMMARY"   
 
       # -------------------------------------------------
       # Upload Artifacts
