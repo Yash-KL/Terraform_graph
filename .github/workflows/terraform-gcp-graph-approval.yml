@@ -96,8 +96,6 @@ jobs:
       - name: Show graph in workflow summary
         working-directory: ${{ env.TF_WORKING_DIR }}
         run: |
-          GRAPH_BASE64=$(base64 tfplan.png | tr -d '\n')
-          
           {
             echo "## Terraform Resource Graph (Plan Preview)"
             echo ""
@@ -106,7 +104,11 @@ jobs:
             echo "- 🟡 Change"
             echo "- 🔴 Destroy"
             echo ""
-            echo "<img src=\"data:image/png;base64,${GRAPH_BASE64}\" />"
+            echo "### 📊 Graph"
+            echo ""
+            echo "➡️ Download and view the graph from workflow artifacts:"
+            echo ""  
+            echo "**Artifacts → terraform-plan-graph → tfplan.png**"
           } >> "$GITHUB_STEP_SUMMARY"
 
       # -------------------------------------------------
