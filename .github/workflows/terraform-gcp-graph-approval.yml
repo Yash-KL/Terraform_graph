@@ -107,9 +107,7 @@ jobs:
         with:
           name: terraform-approved-plan
 
-       permissions:
-        contents: read
-        id-token: write
+
 
       - name: Authenticate to Google Cloud (OIDC)
         uses: google-github-actions/auth@v2
