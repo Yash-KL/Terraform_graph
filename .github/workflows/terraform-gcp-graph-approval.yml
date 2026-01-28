@@ -54,40 +54,13 @@ jobs:
       - name: Install Graphviz & jq
         run: sudo apt-get update && sudo apt-get install -y graphviz jq
 
-      - name: Generate high-quality Terraform graph
+      - name: Generate Terraform dependency graph (Python)
         working-directory: ${{ env.TF_WORKING_DIR }}
         run: |
-          set -e
-
           terraform graph -plan=tfplan.binary > base.dot
+          python3 colorize_tf_graph.py
+          dot -Tpng tfplan.dot -o tfplan.png  
 
-          echo 'digraph terraform {' > tfplan.dot
-          echo '  rankdir=LR;' >> tfplan.dot
-          echo '  node [shape=box style="rounded,filled" fontname="Helvetica"];' >> tfplan.dot
-          echo '  edge [color="#999999"];' >> tfplan.dot
-
-          jq -r '
-            .resource_changes[] |
-            .address as $addr |
-            (.change.actions | join(",")) as $action |
-            if $action == "create" then
-              "\"\($addr)\" [fillcolor=\"#c7f5d9\" label=\"\($addr)\\n➕ CREATE\"];"
-            elif $action == "update" then
-              "\"\($addr)\" [fillcolor=\"#fff3bf\" label=\"\($addr)\\n✏️ UPDATE\"];"
-            elif $action == "delete" then
-              "\"\($addr)\" [fillcolor=\"#f8c7cc\" label=\"\($addr)\\n❌ DESTROY\"];"
-            else
-              "\"\($addr)\" [fillcolor=\"#e0e0e0\" label=\"\($addr)\"];"
-            end
-          ' tfplan.json >> tfplan.dot
-
-          # Add dependency edges
-          grep '->' base.dot >> tfplan.dot
-
-          echo '}' >> tfplan.dot
-
-          dot -Tpng tfplan.dot -o tfplan.png
-          
 
       - name: Show graph in workflow summary
         run: |
