@@ -117,7 +117,7 @@ jobs:
           retention-days: 5
 
       # ------------------------------------------------------------
-      # PR Comment – Mermaid (Managers)
+      # PR Comment – Mermaid Diagram (Managers)
       # ------------------------------------------------------------
       - name: PR Comment – Mermaid Diagram (Managers)
         uses: actions/github-script@v7
@@ -126,28 +126,40 @@ jobs:
             if (!context.issue?.number) return;
 
             const body = [
-              '### Infrastructure Overview (High-Level)',
+              '### Infrastructure Change Overview (High-Level)',
               '',
               '```mermaid',
               'flowchart LR',
-              '  VPC[VPC Network] --> Subnet[Subnetwork]',
-              '  Subnet --> VM[Compute Instance]',
-              '  VPC --> Firewall[Firewall Rule]',
+              '  Plan[Terraform Changes]',
+              '',
+              '  CreateNet[🟢 New Networking]',
+              '  CreateCompute[🟢 New Compute]',
+              '  UpdateSec[🟡 Security Updates]',
+              '  NoDestroy[✅ No Resource Deletions]',
+              '',
+              '  Plan --> CreateNet',
+              '  Plan --> CreateCompute',
+              '  Plan --> UpdateSec',
+              '  Plan --> NoDestroy',
               '```',
               '',
-              'Audience: Managers / Tech Leads',
-              'Purpose: Understand what is being added, not Terraform internals.',
+              '**Audience:** Managers / Tech Leads',
               '',
-              '📎 Detailed dependency graph available in workflow artifacts.'
+              '**Purpose:**',
+              '- Quick understanding of the type of infrastructure changes',
+              '- No dependency on specific resource names',
+              '- Scales safely to large and unknown Terraform codebases',
+              '',
+              '📎 Detailed Terraform dependency graph is available in workflow artifacts for engineers.'
             ].join('\n');
 
             github.rest.issues.createComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.issue.number,
-              body: body
-            });
-
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            issue_number: context.issue.number,
+            body: body
+            }); 
+      
       # ------------------------------------------------------------
       # PR Comment – Technical Graph (Engineers)
       # ------------------------------------------------------------
