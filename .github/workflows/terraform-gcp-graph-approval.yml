@@ -54,25 +54,32 @@ jobs:
       - name: Install Graphviz & jq
         run: sudo apt-get update && sudo apt-get install -y graphviz jq
 
-      - name: Generate Colorized Terraform Graph
+      - name: Generate User-Friendly Colorized Terraform Graph
         working-directory: ${{ env.TF_WORKING_DIR }}
         run: |
           echo 'digraph terraform {' > tfplan.dot
           echo '  rankdir=LR;' >> tfplan.dot
-          echo '  node [style=filled shape=box fontname="Arial"];' >> tfplan.dot
+          echo '  bgcolor="#ffffff";' >> tfplan.dot
+          echo '  node [' >> tfplan.dot
+          echo '    shape=box,' >> tfplan.dot
+          echo '    style="rounded,filled",' >> tfplan.dot
+          echo '    fontname="Helvetica",' >> tfplan.dot
+          echo '    fontsize=12' >> tfplan.dot
+          echo '  ];' >> tfplan.dot
+          echo '  edge [color="#888888"];' >> tfplan.dot
 
           jq -r '
             .resource_changes[] |
             .address as $addr |
             .change.actions[0] as $action |
             if $action == "create" then
-              "\"\($addr)\" [fillcolor=\"#b7f7c2\" label=\"\($addr)\nCREATE\"];"
+              "\"\($addr)\" [fillcolor=\"#c7f5d9\" label=\"\($addr)\n➕ CREATE\"];"
             elif $action == "update" then
-              "\"\($addr)\" [fillcolor=\"#fff3b0\" label=\"\($addr)\nUPDATE\"];"
+              "\"\($addr)\" [fillcolor=\"#fff3bf\" label=\"\($addr)\n✏️ UPDATE\"];";
             elif $action == "delete" then
-              "\"\($addr)\" [fillcolor=\"#f7b7b7\" label=\"\($addr)\nDESTROY\"];"
+              "\"\($addr)\" [fillcolor=\"#f8c7cc\" label=\"\($addr)\n❌ DESTROY\"];";
             else
-              "\"\($addr)\" [fillcolor=\"#d3d3d3\" label=\"\($addr)\"];"
+              "\"\($addr)\" [fillcolor=\"#e0e0e0\" label=\"\($addr)\"];"
             end
           ' tfplan.json >> tfplan.dot
 
@@ -80,20 +87,18 @@ jobs:
 
           dot -Tpng tfplan.dot -o tfplan.png
 
+
       - name: Show graph in workflow summary
         run: |
-          GRAPH_BASE64=$(base64 -w 0 tfplan.png)
-
-          printf '%s\n' \
-          '## Terraform Plan – Resource Graph' \
-          '' \
-          '**Legend**' \
-          '- 🟢 Create' \
-          '- 🟡 Update' \
-          '- 🔴 Destroy' \
-          '' \
-          "<img src=\"data:image/png;base64,${GRAPH_BASE64}\" />" \
-          >> "$GITHUB_STEP_SUMMARY"
+          echo "## Terraform Plan – Resource Graph" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Legend**" >> $GITHUB_STEP_SUMMARY
+          echo "- 🟢 Create" >> $GITHUB_STEP_SUMMARY
+          echo "- 🟡 Update" >> $GITHUB_STEP_SUMMARY
+          echo "- 🔴 Destroy" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "📎 **Download the full graph from artifacts:**" >> $GITHUB_STEP_SUMMARY
+          echo "- terraform-plan-graph → tfplan.png" >> $GITHUB_STEP_SUMMARY
 
       - name: Upload plan & graph artifacts
         uses: actions/upload-artifact@v4
