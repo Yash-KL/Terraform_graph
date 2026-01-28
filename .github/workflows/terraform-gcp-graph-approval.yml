@@ -58,7 +58,7 @@ jobs:
         working-directory: ${{ env.TF_WORKING_DIR }}
         run: |
           terraform graph -plan=tfplan.binary > base.dot
-          python3 colorize_tf_graph.py
+          python3 scripts/colorize_tf_graph.py
           dot -Tpng tfplan.dot -o tfplan.png  
 
 
