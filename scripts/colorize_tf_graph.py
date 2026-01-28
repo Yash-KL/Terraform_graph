@@ -1,52 +1,66 @@
 import json
 import re
+from pathlib import Path
 
-# Load Terraform plan JSON
-with open("tfplan.json") as f:
-    plan = json.load(f)
+PLAN_JSON = "tfplan.json"
+BASE_DOT = "base.dot"
+OUT_DOT = "tfplan.dot"
 
-# Map resource address -> action
-resource_actions = {}
+COLORS = {
+    "create": "#c7f5d9",
+    "update": "#fff3bf",
+    "delete": "#f8c7cc",
+    "no-op": "#e0e0e0"
+}
 
-for rc in plan.get("resource_changes", []):
-    addr = rc["address"]
-    actions = rc["change"]["actions"]
+def load_plan_actions():
+    with open(PLAN_JSON) as f:
+        plan = json.load(f)
 
-    if actions == ["create"]:
-        resource_actions[addr] = "create"
-    elif actions == ["update"]:
-        resource_actions[addr] = "update"
-    elif actions == ["delete"]:
-        resource_actions[addr] = "delete"
-    elif actions == ["create", "delete"]:
-        resource_actions[addr] = "replace"
+    actions = {}
+    for rc in plan.get("resource_changes", []):
+        addr = rc["address"]
+        act = ",".join(rc["change"]["actions"])
+        actions[addr] = act
 
-# Load DOT graph
-with open("tfplan.dot") as f:
-    dot = f.read()
+    return actions
 
-def color_node(match):
-    node = match.group(1)
+def load_edges():
+    edges = []
+    edge_re = re.compile(r'"(.+?)"\s*->\s*"(.+?)"')
 
-    color = "lightgray"
-    style = "filled"
+    with open(BASE_DOT) as f:
+        for line in f:
+            match = edge_re.search(line)
+            if match:
+                edges.append((match.group(1), match.group(2)))
 
-    action = resource_actions.get(node)
+    return edges
 
-    if action == "create":
-        color = "palegreen"
-    elif action == "update":
-        color = "gold"
-    elif action in ("delete", "replace"):
-        color = "lightcoral"
+def generate_dot(actions, edges):
+    lines = [
+        "digraph terraform {",
+        "  rankdir=LR;",
+        '  node [shape=box style="rounded,filled" fontname="Helvetica"];',
+        '  edge [color="#999999"];'
+    ]
 
-    return f'"{node}" [style={style}, fillcolor="{color}"];'
+    for addr, action in actions.items():
+        color = COLORS.get(action, COLORS["no-op"])
+        label = f"{addr}\\n{action.upper()}"
+        lines.append(f'"{addr}" [fillcolor="{color}" label="{label}"];')
 
-# Replace node definitions
-dot = re.sub(r'"([^"]+)"\s*\[.*?\];', color_node, dot)
+    for src, dst in edges:
+        lines.append(f'"{src}" -> "{dst}";')
 
-# Write colored DOT
-with open("tfplan-colored.dot", "w") as f:
-    f.write(dot)
+    lines.append("}")
 
-print("✅ Colored Terraform graph generated")
+    Path(OUT_DOT).write_text("\n".join(lines))
+
+def main():
+    actions = load_plan_actions()
+    edges = load_edges()
+    generate_dot(actions, edges)
+
+if __name__ == "__main__":
+    main()
