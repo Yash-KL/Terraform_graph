@@ -13,6 +13,18 @@ COLORS = {
     "no-op": "#e0e0e0"
 }
 
+
+def sanitize_label(text: str) -> str:
+    """
+    Make text safe for Graphviz labels
+    """
+    return (
+        text.replace("\\", "\\\\")
+            .replace('"', '\\"')
+            .replace("\n", "\\n")
+    )
+
+
 def load_plan_actions():
     with open(PLAN_JSON) as f:
         plan = json.load(f)
@@ -24,6 +36,7 @@ def load_plan_actions():
         actions[addr] = act
 
     return actions
+
 
 def load_edges():
     edges = []
@@ -37,6 +50,7 @@ def load_edges():
 
     return edges
 
+
 def generate_dot(actions, edges):
     lines = [
         "digraph terraform {",
@@ -45,11 +59,16 @@ def generate_dot(actions, edges):
         '  edge [color="#999999"];'
     ]
 
+    # Nodes
     for addr, action in actions.items():
         color = COLORS.get(action, COLORS["no-op"])
-        label = f"{addr}\\n{action.upper()}"
-        lines.append(f'"{addr}" [fillcolor="{color}" label="{label}"];')
+        label = sanitize_label(f"{addr}\\n{action.upper()}")
 
+        lines.append(
+            f'"{addr}" [fillcolor="{color}" label="{label}"];'
+        )
+
+    # Edges
     for src, dst in edges:
         lines.append(f'"{src}" -> "{dst}";')
 
@@ -57,10 +76,12 @@ def generate_dot(actions, edges):
 
     Path(OUT_DOT).write_text("\n".join(lines))
 
+
 def main():
     actions = load_plan_actions()
     edges = load_edges()
     generate_dot(actions, edges)
+
 
 if __name__ == "__main__":
     main()
