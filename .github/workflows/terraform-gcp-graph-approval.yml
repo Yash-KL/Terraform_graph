@@ -1,15 +1,9 @@
-name: Terraform Plan with Color Graph (Safe Review Only)
+name: Terraform Plan (Review Only)
 
 on:
   pull_request:
     branches: [ main ]
-
   workflow_dispatch:
-    inputs:
-      reason:
-        description: "Why are you running this plan?"
-        required: false
-        default: "Manual Terraform plan run"
 
 permissions:
   contents: read
@@ -24,10 +18,13 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      # ------------------------------------------------------------
+      # Checkout & Auth
+      # ------------------------------------------------------------
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Authenticate to Google Cloud
+      - name: Authenticate to GCP
         uses: google-github-actions/auth@v2
         with:
           credentials_json: ${{ secrets.GCP_SA_KEY }}
@@ -37,6 +34,9 @@ jobs:
         with:
           terraform_version: ${{ env.TF_VERSION }}
 
+      # ------------------------------------------------------------
+      # Terraform Plan
+      # ------------------------------------------------------------
       - name: Terraform Init
         working-directory: ${{ env.TF_WORKING_DIR }}
         run: terraform init
@@ -51,59 +51,60 @@ jobs:
           terraform plan -out=tfplan.binary
           terraform show -json tfplan.binary > tfplan.json
 
+      # ------------------------------------------------------------
+      # Graph generation (SVG)
+      # ------------------------------------------------------------
       - name: Install Graphviz & jq
         run: sudo apt-get update && sudo apt-get install -y graphviz jq
 
-      - name: Generate Terraform dependency graph (Python)
+      - name: Generate Terraform Dependency Graph (SVG)
         working-directory: ${{ env.TF_WORKING_DIR }}
         run: |
           terraform graph -plan=tfplan.binary > base.dot
           python3 scripts/colorize_tf_graph.py
-          dot -Tpng tfplan.dot -o tfplan.png  
+          dot -Tsvg tfplan.dot -o tfplan.svg
 
-
-      - name: Show graph in workflow summary
+      # ------------------------------------------------------------
+      # Impact Summary (with resource names)
+      # ------------------------------------------------------------
+      - name: Terraform Impact Summary
         run: |
-          echo "## Terraform Plan – Resource Graph" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Legend**" >> $GITHUB_STEP_SUMMARY
-          echo "- 🟢 Create" >> $GITHUB_STEP_SUMMARY
-          echo "- 🟡 Update" >> $GITHUB_STEP_SUMMARY
-          echo "- 🔴 Destroy" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "📎 **Download the full graph from artifacts:**" >> $GITHUB_STEP_SUMMARY
-          echo "- terraform-plan-graph → tfplan.png" >> $GITHUB_STEP_SUMMARY
-
-
-      - name: Terraform impact summary
-        run: |
-          CREATES=$(jq '[.resource_changes[] | select(.change.actions | index("create"))] | length' tfplan.json)
-          UPDATES=$(jq '[.resource_changes[] | select(.change.actions | index("update"))] | length' tfplan.json)
-          DESTROYS=$(jq '[.resource_changes[] | select(.change.actions | index("delete"))] | length' tfplan.json)
-
           echo "## Terraform Plan – Impact Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| Action | Count |" >> $GITHUB_STEP_SUMMARY
-          echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
-          echo "| 🟢 Create | $CREATES |" >> $GITHUB_STEP_SUMMARY
-          echo "| 🟡 Update | $UPDATES |" >> $GITHUB_STEP_SUMMARY
-          echo "| 🔴 Destroy | $DESTROYS |" >> $GITHUB_STEP_SUMMARY
+          echo "| Action | Count | Resources |" >> $GITHUB_STEP_SUMMARY
+          echo "|--------|-------|-----------|" >> $GITHUB_STEP_SUMMARY
+
+          CREATES=$(jq -r '.resource_changes[] | select(.change.actions | index("create")) | .address' tfplan.json)
+          UPDATES=$(jq -r '.resource_changes[] | select(.change.actions | index("update")) | .address' tfplan.json)
+          DESTROYS=$(jq -r '.resource_changes[] | select(.change.actions | index("delete")) | .address' tfplan.json)
+
+          CREATE_COUNT=$(echo "$CREATES" | grep -c . || true)
+          UPDATE_COUNT=$(echo "$UPDATES" | grep -c . || true)
+          DESTROY_COUNT=$(echo "$DESTROYS" | grep -c . || true)
+
+          echo "| 🟢 Create | $CREATE_COUNT | $(echo "$CREATES" | paste -sd ', ' -) |" >> $GITHUB_STEP_SUMMARY
+          echo "| 🟡 Update | $UPDATE_COUNT | $(echo "$UPDATES" | paste -sd ', ' -) |" >> $GITHUB_STEP_SUMMARY
+          echo "| 🔴 Destroy | $DESTROY_COUNT | $(echo "$DESTROYS" | paste -sd ', ' -) |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
 
-          if [ "$DESTROYS" -gt 0 ]; then
-            echo "⚠️ **WARNING: Destroy actions detected**" >> $GITHUB_STEP_SUMMARY
+          if [ "$DESTROY_COUNT" -gt 0 ]; then
+            RISK="HIGH"
+            echo "⚠️ **Destroy actions detected – review carefully**" >> $GITHUB_STEP_SUMMARY
+          elif [ "$UPDATE_COUNT" -gt 0 ]; then
+            RISK="MEDIUM"
           else
+            RISK="LOW"
             echo "✅ **No destroy actions detected**" >> $GITHUB_STEP_SUMMARY
           fi
 
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### 📊 Visual Resource Graph" >> $GITHUB_STEP_SUMMARY
+          echo "**Overall Risk Level:** 🔥 $RISK" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "- **Artifact:** \`terraform-plan-graph\`" >> $GITHUB_STEP_SUMMARY
-          echo "- **File:** \`tfplan.png\`" >> $GITHUB_STEP_SUMMARY
-          echo "➡️ Workflow run → Artifacts → terraform-plan-graph → tfplan.png" >> $GITHUB_STEP_SUMMARY
+          echo "📎 Dependency graph: Artifacts → terraform-plan-graph → tfplan.svg" >> $GITHUB_STEP_SUMMARY
 
-
+      # ------------------------------------------------------------
+      # Upload artifacts
+      # ------------------------------------------------------------
       - name: Upload plan & graph artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -112,34 +113,57 @@ jobs:
             tfplan.binary
             tfplan.json
             tfplan.dot
-            tfplan.png
+            tfplan.svg
           retention-days: 5
 
-      - name: Comment graph on PR (PR only)
+      # ------------------------------------------------------------
+      # PR Comment – Mermaid (Managers)
+      # ------------------------------------------------------------
+      - name: PR Comment – Mermaid Diagram (Managers)
         uses: actions/github-script@v7
         with:
           script: |
             if (!context.issue?.number) return;
 
-            const fs = require('fs');
-            const image = fs.readFileSync('tfplan.png', { encoding: 'base64' });
+            const body = [
+              '### Infrastructure Overview (High-Level)',
+              '',
+              '```mermaid',
+              'flowchart LR',
+              '  VPC[VPC Network] --> Subnet[Subnetwork]',
+              '  Subnet --> VM[Compute Instance]',
+              '  VPC --> Firewall[Firewall Rule]',
+              '```',
+              '',
+              'Audience: Managers / Tech Leads',
+              'Purpose: Understand what is being added, not Terraform internals.',
+              '',
+              '📎 Detailed dependency graph available in workflow artifacts.'
+            ].join('\n');
+
+            github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: body
+            });
+
+      # ------------------------------------------------------------
+      # PR Comment – Technical Graph (Engineers)
+      # ------------------------------------------------------------
+      - name: PR Comment – Technical Graph (Engineers)
+        uses: actions/github-script@v7
+        with:
+          script: |
+            if (!context.issue?.number) return;
 
             const body = [
-              '### Terraform Plan – Visual Graph',
+              '### Terraform Dependency Graph (Technical)',
               '',
-              '**Legend**',
-              '- 🟢 Create',
-              '- 🟡 Update',
-              '- 🔴 Destroy',
+              '📎 **Download SVG:**',
+              'Workflow run → Artifacts → terraform-plan-graph → tfplan.svg',
               '',
-              '<details>',
-              '<summary>Click to expand</summary>',
-              '',
-              `<img src="data:image/png;base64,${image}" />`,
-              '',
-              '</details>',
-              '',
-              '⚠️ **Apply / Destroy are disabled. Manual approval required in separate workflow.**'
+              '⚠️ Apply & destroy are disabled in this workflow.'
             ].join('\n');
 
             github.rest.issues.createComment({
