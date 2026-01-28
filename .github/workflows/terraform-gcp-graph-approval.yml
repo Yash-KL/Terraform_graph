@@ -54,35 +54,40 @@ jobs:
       - name: Install Graphviz & jq
         run: sudo apt-get update && sudo apt-get install -y graphviz jq
 
-      - name: Generate User-Friendly Colorized Terraform Graph
+      - name: Generate high-quality Terraform graph
         working-directory: ${{ env.TF_WORKING_DIR }}
         run: |
           set -e
 
+          terraform graph -plan=tfplan.binary > base.dot
+
           echo 'digraph terraform {' > tfplan.dot
           echo '  rankdir=LR;' >> tfplan.dot
           echo '  node [shape=box style="rounded,filled" fontname="Helvetica"];' >> tfplan.dot
-          echo '  edge [color="#888888"];' >> tfplan.dot
+          echo '  edge [color="#999999"];' >> tfplan.dot
 
           jq -r '
             .resource_changes[] |
             .address as $addr |
-            (.change.actions | join(",")) as $actions |
-            if $actions == "create" then
-              "\"\($addr)\" [fillcolor=\"#c7f5d9\" label=\"\($addr)\\n➕ CREATE\"]"
-            elif $actions == "update" then
-              "\"\($addr)\" [fillcolor=\"#fff3bf\" label=\"\($addr)\\n✏️ UPDATE\"]"
-            elif $actions == "delete" then
-              "\"\($addr)\" [fillcolor=\"#f8c7cc\" label=\"\($addr)\\n❌ DESTROY\"]"
+            (.change.actions | join(",")) as $action |
+            if $action == "create" then
+              "\"\($addr)\" [fillcolor=\"#c7f5d9\" label=\"\($addr)\\n➕ CREATE\"];"
+            elif $action == "update" then
+              "\"\($addr)\" [fillcolor=\"#fff3bf\" label=\"\($addr)\\n✏️ UPDATE\"];"
+            elif $action == "delete" then
+              "\"\($addr)\" [fillcolor=\"#f8c7cc\" label=\"\($addr)\\n❌ DESTROY\"];"
             else
-              "\"\($addr)\" [fillcolor=\"#e0e0e0\" label=\"\($addr)\\nNO-OP\"]"
+              "\"\($addr)\" [fillcolor=\"#e0e0e0\" label=\"\($addr)\"];"
             end
           ' tfplan.json >> tfplan.dot
+
+          # Add dependency edges
+          grep '->' base.dot >> tfplan.dot
 
           echo '}' >> tfplan.dot
 
           dot -Tpng tfplan.dot -o tfplan.png
-
+          
 
       - name: Show graph in workflow summary
         run: |
@@ -95,6 +100,36 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "📎 **Download the full graph from artifacts:**" >> $GITHUB_STEP_SUMMARY
           echo "- terraform-plan-graph → tfplan.png" >> $GITHUB_STEP_SUMMARY
+
+
+      - name: Terraform impact summary
+        run: |
+          CREATES=$(jq '[.resource_changes[] | select(.change.actions | index("create"))] | length' tfplan.json)
+          UPDATES=$(jq '[.resource_changes[] | select(.change.actions | index("update"))] | length' tfplan.json)
+          DESTROYS=$(jq '[.resource_changes[] | select(.change.actions | index("delete"))] | length' tfplan.json)
+
+          echo "## Terraform Plan – Impact Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Action | Count |" >> $GITHUB_STEP_SUMMARY
+          echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| 🟢 Create | $CREATES |" >> $GITHUB_STEP_SUMMARY
+          echo "| 🟡 Update | $UPDATES |" >> $GITHUB_STEP_SUMMARY
+          echo "| 🔴 Destroy | $DESTROYS |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          if [ "$DESTROYS" -gt 0 ]; then
+            echo "⚠️ **WARNING: Destroy actions detected**" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "✅ **No destroy actions detected**" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 📊 Visual Resource Graph" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Artifact:** \`terraform-plan-graph\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **File:** \`tfplan.png\`" >> $GITHUB_STEP_SUMMARY
+          echo "➡️ Workflow run → Artifacts → terraform-plan-graph → tfplan.png" >> $GITHUB_STEP_SUMMARY
+
 
       - name: Upload plan & graph artifacts
         uses: actions/upload-artifact@v4
