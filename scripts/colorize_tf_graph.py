@@ -1,5 +1,6 @@
 import json
 import re
+import hashlib
 from pathlib import Path
 
 PLAN_JSON = "tfplan.json"
@@ -13,10 +14,17 @@ COLORS = {
     "no-op": "#e0e0e0"
 }
 
-EDGE_RE = re.compile(r'("?[^"]+"?)\s*->\s*("?[^"]+"?)')
+EDGE_RE = re.compile(r'"?([^"\s]+)"?\s*->\s*"?(.*?)"?$')
 
 
-def sanitize(text: str) -> str:
+def safe_id(text: str) -> str:
+    """
+    Generate a DOT-safe node id
+    """
+    return "n_" + hashlib.md5(text.encode()).hexdigest()
+
+
+def sanitize_label(text: str) -> str:
     return (
         text.replace("\\", "\\\\")
             .replace('"', '\\"')
@@ -41,15 +49,20 @@ def load_edges():
     edges = []
     with open(BASE_DOT) as f:
         for line in f:
-            match = EDGE_RE.search(line)
-            if match:
-                src = match.group(1).strip('"')
-                dst = match.group(2).strip('"')
-                edges.append((src, dst))
+            if "->" not in line:
+                continue
+            parts = line.strip().strip(";").split("->")
+            if len(parts) != 2:
+                continue
+            src = parts[0].strip().strip('"')
+            dst = parts[1].strip().strip('"')
+            edges.append((src, dst))
     return edges
 
 
 def generate_dot(actions, edges):
+    id_map = {addr: safe_id(addr) for addr in actions.keys()}
+
     lines = [
         "digraph terraform {",
         "  rankdir=LR;",
@@ -59,13 +72,18 @@ def generate_dot(actions, edges):
 
     # Nodes
     for addr, action in actions.items():
+        node_id = id_map[addr]
         color = COLORS.get(action, COLORS["no-op"])
-        label = sanitize(f"{addr}\\n{action.upper()}")
-        lines.append(f'"{addr}" [fillcolor="{color}" label="{label}"];')
+        label = sanitize_label(f"{addr}\\n{action.upper()}")
 
-    # Edges (ALWAYS quoted)
+        lines.append(
+            f'{node_id} [fillcolor="{color}" label="{label}"];'
+        )
+
+    # Edges
     for src, dst in edges:
-        lines.append(f'"{src}" -> "{dst}";')
+        if src in id_map and dst in id_map:
+            lines.append(f'{id_map[src]} -> {id_map[dst]};')
 
     lines.append("}")
     Path(OUT_DOT).write_text("\n".join(lines))
