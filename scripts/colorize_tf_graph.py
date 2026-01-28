@@ -13,11 +13,10 @@ COLORS = {
     "no-op": "#e0e0e0"
 }
 
+EDGE_RE = re.compile(r'("?[^"]+"?)\s*->\s*("?[^"]+"?)')
 
-def sanitize_label(text: str) -> str:
-    """
-    Make text safe for Graphviz labels
-    """
+
+def sanitize(text: str) -> str:
     return (
         text.replace("\\", "\\\\")
             .replace('"', '\\"')
@@ -40,14 +39,13 @@ def load_plan_actions():
 
 def load_edges():
     edges = []
-    edge_re = re.compile(r'"(.+?)"\s*->\s*"(.+?)"')
-
     with open(BASE_DOT) as f:
         for line in f:
-            match = edge_re.search(line)
+            match = EDGE_RE.search(line)
             if match:
-                edges.append((match.group(1), match.group(2)))
-
+                src = match.group(1).strip('"')
+                dst = match.group(2).strip('"')
+                edges.append((src, dst))
     return edges
 
 
@@ -62,18 +60,14 @@ def generate_dot(actions, edges):
     # Nodes
     for addr, action in actions.items():
         color = COLORS.get(action, COLORS["no-op"])
-        label = sanitize_label(f"{addr}\\n{action.upper()}")
+        label = sanitize(f"{addr}\\n{action.upper()}")
+        lines.append(f'"{addr}" [fillcolor="{color}" label="{label}"];')
 
-        lines.append(
-            f'"{addr}" [fillcolor="{color}" label="{label}"];'
-        )
-
-    # Edges
+    # Edges (ALWAYS quoted)
     for src, dst in edges:
         lines.append(f'"{src}" -> "{dst}";')
 
     lines.append("}")
-
     Path(OUT_DOT).write_text("\n".join(lines))
 
 
